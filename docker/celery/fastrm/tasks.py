@@ -3,6 +3,7 @@ from .celery import app
 import os
 
 from irods.column import Criterion
+from irods.exception import CollectionDoesNotExist
 from irods.models import DataObject, DataObjectMeta, Collection, CollectionMeta
 from irods.session import iRODSSession
 
@@ -17,16 +18,19 @@ env_file = os.path.expanduser('~/.irods/irods_environment.json')
 
 @app.task
 def list_collection(logical_path, recursive=False):
-	collection_members = []
+	"""Return a dict with "data_objects" and "subcollections" in the collection at `logical_path`."""
 	with iRODSSession(**delete_this_env) as session:
-		data_object_query = session.query(Collection.name, DataObject.name).filter(
-			Criterion('=', Collection.name, logical_path)
-		)
-		for result in data_object_query:
-			collection_members.append('/'.join([result[Collection.name], result[DataObject.name]]))
-		collection_query = session.query(Collection.name).filter(
-			Criterion('=', Collection.parent_name, logical_path)
-		)
-		for result in collection_query:
-			collection_members.append(result[Collection.name])
-	return collection_members
+		try:
+			target_collection = session.collections.get(logical_path)
+		except CollectionDoesNotExist:
+			# Print an error message here because the exception doesn't tell you what doesn't exist.
+			print(f"Collection [{logical_path}] does not exist.")
+			raise
+		data_objects = target_collection.data_objects
+		subcollections = target_collection.subcollections
+		for subcollection in subcollections:
+			list_collection.delay(subcollection.path)
+	return {
+		"data_objects": [do.path for do in data_objects],
+		"subcollections": [sc.path for sc in subcollections]
+	}
