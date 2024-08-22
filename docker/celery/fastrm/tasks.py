@@ -45,17 +45,39 @@ def remove_collection(logical_path):
 			# Print an error message here because the exception doesn't tell you what doesn't exist.
 			print(f"Collection [{logical_path}] does not exist.")
 			raise
+		data_objects_to_remove = []
+		chunk_size = 50
 		for data_object in target_collection.data_objects:
-			remove_data_object.delay(data_object.path)
+			data_objects_to_remove.append(data_object.path)
+			if len(data_objects_to_remove) >= chunk_size - 1:
+				remove_data_objects.delay(data_objects_to_remove)
+				data_objects_to_remove = []
+		if len(data_objects_to_remove) > 0:
+			remove_data_objects.delay(data_objects_to_remove)
+			data_objects_to_remove = []
 		for subcollection in target_collection.subcollections:
 			remove_collection.delay(subcollection.path)
 
+		#remove_empty_collection.delay(logical_path)
+
 @app.task
-def remove_data_object(logical_path, no_trash=False):
+def remove_data_objects(logical_paths, no_trash=False):
 	"""Remove a data object, optionally omitting rename to trash collection."""
 	with iRODSSession(**delete_this_env) as session:
+		for logical_path in logical_paths:
+			try:
+				session.data_objects.unlink(logical_path, force=not no_trash)
+			except DataObjectDoesNotExist:
+				print(f"Data object [{logical_path}] does not exist.")
+				# raise
+				continue
+
+@app.task
+def remove_empty_collection(logical_path, no_trash=False):
+	with iRODSSession(**delete_this_env) as session:
 		try:
-			session.data_objects.unlink(logical_path, force=not no_trash)
-		except DataObjectDoesNotExist:
-			print(f"Data object [{logical_path}] does not exist.")
+			session.collections.remove(logical_path, recurse=False, force=not no_trash)
+		except CollectionDoesNotExist:
+			# Print an error message here because the exception doesn't tell you what doesn't exist.
+			print(f"Collection [{logical_path}] does not exist.")
 			raise
